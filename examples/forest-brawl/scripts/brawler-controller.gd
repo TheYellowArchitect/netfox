@@ -33,6 +33,8 @@ var gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
 var respawn_tick: int = -1
 var respawn_count: int = 0
 
+var debug_tick_directions: Dictionary = {} #<int, Vector3>
+
 func register_hit(from: BrawlerController):
 	if from == self:
 		push_error("Player %s (#%s) trying to register hit on themselves!" % [player_name, player_id])
@@ -118,6 +120,12 @@ func _rollback_tick(delta, tick, is_fresh):
 	else:
 		velocity.x = move_toward(velocity.x, 0, speed)
 		velocity.z = move_toward(velocity.z, 0, speed)
+	
+	if (multiplayer.is_server() && player_id != 1):
+		if (debug_tick_directions.has(tick) == false):
+			debug_tick_directions[tick] = direction
+		else:
+			print("Server: NetworkTime.tick (%s) Rollback Correction for Avatar %s at tick %s directions are: %v | %v" % [NetworkTime.tick, player_id, tick, direction, debug_tick_directions[tick]])
 	
 	# Aim
 	if input.aim:

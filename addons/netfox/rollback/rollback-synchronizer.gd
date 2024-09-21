@@ -44,7 +44,7 @@ func process_settings():
 	_states.clear()
 	_inputs.clear()
 	_latest_state = NetworkTime.tick - 1
-	_earliest_input = NetworkTime.tick
+	#_earliest_input = NetworkTime.tick
 
 	# Gather state props - all state props are recorded
 	for property in state_properties:
@@ -102,6 +102,8 @@ func _ready():
 
 func _before_loop():
 	if _auth_input_props.is_empty():
+		if (multiplayer.is_server() && (root as BrawlerController).player_id != 1):
+			print("Server starting rollback for client avatar at tick %s starting at tick %s" % [NetworkTime.tick, _earliest_input])
 		# We don't have any inputs we own, simulate from earliest we've received
 		NetworkRollback.notify_resimulation_start(_earliest_input)
 	else:
@@ -160,15 +162,18 @@ func _record_tick(tick: int):
 			# Broadcast as new state
 			_latest_state = max(_latest_state, tick)
 			_states[tick] = PropertySnapshot.merge(_states.get(tick, {}), broadcast)
-			_submit_state.rpc(broadcast, tick)
 	
 	# Record state for specified tick ( current + 1 )
 	if not _record_state_props.is_empty() and tick > _latest_state:
 		_states[tick] = PropertySnapshot.extract(_record_state_props)
 
 func _after_loop():
-	_earliest_input = NetworkTime.tick
+	if (_auth_input_props.is_empty() == false):
+		_earliest_input = NetworkTime.tick
 	
+	if (not _auth_state_props.is_empty()):
+		_submit_state.rpc(_states[NetworkTime.tick], NetworkTime.tick)
+		
 	# Apply display state
 	var display_state = _get_history(_states, NetworkTime.tick - NetworkRollback.display_offset)
 	PropertySnapshot.apply(display_state, _property_cache)
@@ -221,7 +226,7 @@ func _get_history(buffer: Dictionary, tick: int) -> Dictionary:
 
 	if tick < earliest:
 		return buffer[earliest]
-	
+
 	if tick > latest:
 		return buffer[latest]
 	
@@ -258,7 +263,23 @@ func _submit_input(input: Dictionary, tick: int):
 					# We received an array of current and previous inputs, merge them into our history.
 					_inputs[t] = _inputs.get(t, {})
 					_inputs[t][property] = new_input
-					_earliest_input = min(_earliest_input, t)
+				
+					#if (multiplayer.is_server()):
+						#print("Server: %s previous _earliest input (%s) and tick is %s" % [NetworkTime.tick, _earliest_input, t])
+					if (t <= _earliest_input || _earliest_input == 0 || t == _earliest_input + 1):
+						_earliest_input = t
+					else:#much greater, with a gap
+						for picked_tick in range(_earliest_input, t + 1):
+							#if (multiplayer.is_server()):
+								#print("Server: is picked tick %s and has tick %s" % [picked_tick, _inputs.has(picked_tick)])
+							if (_inputs.has(picked_tick)):
+								_earliest_input = picked_tick
+								break
+							#elif (multiplayer.is_server()):
+								#print("Server: _inputs DOESNT have [%s]" % picked_tick)
+					#if (multiplayer.is_server()):
+						#print("Server: %s new _earliest_input (%s) and tick was %s" % [NetworkTime.tick, _earliest_input, t])
+					
 	else:
 		_logger.warning("Received invalid input from %s for tick %s for %s" % [sender, tick, root.name])
 
@@ -271,7 +292,7 @@ func _submit_state(state: Dictionary, tick: int):
 	
 	if tick < NetworkTime.tick - NetworkRollback.history_limit and _latest_state >= 0:
 		# State too old!
-		_logger.error("Received state for %s, rejecting because older than %s frames" % [tick, NetworkRollback.history_limit])
+		_logger.error("Peer %s at tick %s received state for %s, rejecting because older than %s frames" % [multiplayer.get_unique_id(), NetworkTime.tick, tick, NetworkRollback.history_limit])
 		return
 
 	var sender = multiplayer.get_remote_sender_id()
@@ -290,7 +311,6 @@ func _submit_state(state: Dictionary, tick: int):
 	
 	if sanitized.size() > 0:
 		_states[tick] = PropertySnapshot.merge(_states.get(tick, {}), sanitized)
-		# _latest_state = max(_latest_state, tick)
 		_latest_state = tick
 	else:
 		_logger.warning("Received invalid state from %s for tick %s" % [sender, tick])
